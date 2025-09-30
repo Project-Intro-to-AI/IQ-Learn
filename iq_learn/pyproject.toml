@@ -42,7 +42,7 @@ dependencies = [
   "greenlet==3.0.3",
   "grpcio==1.62.0",
   # Gym stack “cũ” cho Py3.10 (CartPole đủ, không cần Box2D)
-  "gym==0.23.1",
+  "gym[box2d]==0.23.1",
   "huggingface-hub==0.22.2",
   # "huggingface-sb3==3.0",     # (bỏ: yêu cầu SB3 2.x + Gymnasium; không hợp stack hiện tại)
   "hydra-core==1.0.0",
@@ -124,6 +124,7 @@ dependencies = [
   "mujoco_py==2.1.2.14",
   "autorom[accept-rom-license]>=0.6.1",
   "cython<3.0",
+  "box2d-py>=2.3.5",
 ]
 [tool.uv]
 environments = [
