@@ -11,6 +11,7 @@ import time
 from collections import deque
 from itertools import count
 import types
+import collections
 
 import hydra
 import numpy as np
@@ -28,7 +29,7 @@ from utils.utils import eval_mode, average_dicts, get_concat_samples, evaluate, 
 from utils.logger import Logger
 from iq import iq_loss
 
-torch.set_num_threads(2)
+torch.set_num_threads(os.cpu_count())
 
 
 def get_args(cfg: DictConfig):
@@ -37,12 +38,63 @@ def get_args(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
     return cfg
 
+# add these imports at top
+
+def _to_plain(obj):
+    # recursively convert OmegaConf containers & defaultdicts into plain dict/list
+    if isinstance(obj, collections.defaultdict):
+        obj = dict(obj)
+    if isinstance(obj, dict):
+        return {k: _to_plain(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(_to_plain(v) for v in obj)
+    return obj
+
+def _space_dim(space):
+    # Box
+    if getattr(space, "shape", None):
+        return int(np.prod(space.shape))
+    # Discrete / MultiBinary (n là int)
+    if hasattr(space, "n"):
+        return int(space.n)
+    # MultiDiscrete
+    if hasattr(space, "nvec"):
+        return int(np.sum(space.nvec))
+    raise ValueError(f"Unsupported space: {space}")
 
 @hydra.main(config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     args = get_args(cfg)
-    wandb.init(project=args.project_name, entity='iq-learn',
-               sync_tensorboard=True, reinit=True, config=args)
+    
+    env_args = args.env
+    env = make_env(args)
+    eval_env = make_env(args)
+
+    # Seed envs (fix deprecation below)
+    env.seed(args.seed)
+    eval_env.seed(args.seed + 10)
+    
+    # Get dims
+    obs_dim = _space_dim(env.observation_space)
+    action_dim = _space_dim(env.action_space)
+    
+    # Set dims in config if missing
+    if OmegaConf.is_missing(args.agent, "obs_dim") or str(args.agent.obs_dim).strip().startswith("???"):
+        args.agent.obs_dim = obs_dim
+    if OmegaConf.is_missing(args.agent, "action_dim") or str(args.agent.action_dim).strip().startswith("???"):
+        args.agent.action_dim = action_dim
+    
+    # CRITICAL: Resolve FULL config NOW (before agent creation)
+    OmegaConf.resolve(args)  # Interpolates ${agent.obs_dim} -> 4 in q_net, etc.
+    
+    # Now create agent (this will use resolved q_net)    
+    cfg_resolved = OmegaConf.to_container(args, resolve=True)
+    
+    cfg_plain = _to_plain(cfg_resolved)  # strip defaultdicts
+
+    project_name = str(cfg_plain.get("project_name") or "iq-learn")
+    wandb.init(project=args.project_name, 
+               sync_tensorboard=True, reinit=True, config=cfg_plain)
 
     # set seeds
     random.seed(args.seed)
@@ -54,13 +106,6 @@ def main(cfg: DictConfig):
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
 
-    env_args = args.env
-    env = make_env(args)
-    eval_env = make_env(args)
-
-    # Seed envs
-    env.seed(args.seed)
-    eval_env.seed(args.seed + 10)
 
     REPLAY_MEMORY = int(env_args.replay_mem)
     INITIAL_MEMORY = int(env_args.initial_mem)
